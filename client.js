@@ -12,7 +12,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: '@local/followup-thread',
+  id: 'dsh-followup-thread',
   factory(require) {
     const React = require('react')
     const h = React.createElement
