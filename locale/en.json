@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Follow-up thread",
+    "description": "Ask a follow-up directly under any answer: the question and its answer stay together, right after that answer, with the context continuing from it instead of from the bottom of the conversation.",
+    "detail": "docs/DETAIL.md"
+  }
+}
