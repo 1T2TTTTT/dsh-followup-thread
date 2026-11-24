@@ -8,8 +8,13 @@
  * Session list: no child Session, no fork, so the left workspace never gains a
  * conversation for a follow-up.
  *
+ * A thread is a conversation: `history` carries the turns already exchanged
+ * under this answer, so the user can keep talking in the same thread instead of
+ * starting a new one for every question.
+ *
  * Route: POST /api/followup-thread/ask
- *   request  { sessionId: string, atSeq?: number, question: string }
+ *   request  { sessionId: string, atSeq?: number, question: string,
+ *              history?: Array<{ role: 'user' | 'assistant', text: string }> }
  *   response { ok: true, value: { answer: string, provider?: string, model?: string } }
  *          | { ok: false, error: { code: string, message: string } }
  */
@@ -19,6 +24,8 @@ const MAX_CONTEXT_CHARS = 80000
 const TOOL_ARGS_CHARS = 400
 const TOOL_RESULT_CHARS = 1500
 const ANSWER_TIMEOUT_MS = 180000
+const MAX_HISTORY_TURNS = 40
+const HISTORY_TURN_CHARS = 4000
 
 const INSTRUCTIONS = [
   '下面是用户与你此前的一段对话记录（含当时调用了哪些工具、拿到了什么结果），记录截止到其中最后一条回答。用户现在针对那条回答提出了一个追问，请直接回答这个追问。',
@@ -173,6 +180,35 @@ function deriveMessages(events, atSeq, route) {
     content: [{ type: 'text', text: entry.text }],
     source: entry.role === 'assistant' ? { kind: 'model', provider, model } : { kind: 'user' },
   }))
+}
+
+/**
+ * The thread's own earlier turns, oldest first.
+ *
+ * A follow-up thread is a conversation, not one question: the turns already
+ * exchanged under this answer ride on top of the replayed session, so the model
+ * sees "what was discussed here" and can be asked again and again. Adjacent
+ * turns with the same role are merged because the adapters expect an
+ * alternating conversation, and the thread must open with a user turn.
+ */
+function sanitizeHistory(history) {
+  if (!Array.isArray(history)) return []
+  const turns = []
+  for (const item of history.slice(-MAX_HISTORY_TURNS)) {
+    if (!isRecord(item)) continue
+    const role = item.role === 'assistant' ? 'assistant' : (item.role === 'user' ? 'user' : null)
+    if (role === null) continue
+    const text = clip(typeof item.text === 'string' ? item.text : '', HISTORY_TURN_CHARS)
+    if (text.length === 0) continue
+    const last = turns[turns.length - 1]
+    if (last !== undefined && last.role === role) {
+      last.text = clip(last.text + '\n\n' + text, HISTORY_TURN_CHARS)
+      continue
+    }
+    turns.push({ role, text })
+  }
+  while (turns.length > 0 && turns[0].role !== 'user') turns.shift()
+  return turns
 }
 
 /** Count the event types, to explain an empty replay in the UI. */
@@ -350,14 +386,26 @@ export function apply(ctx) {
       }
 
       try {
+        const history = sanitizeHistory(payload.history)
+        const historyMessages = history.map((turn, index) => ({
+          id: 'followup-history-' + index,
+          role: turn.role,
+          content: [{ type: 'text', text: turn.text }],
+          source: turn.role === 'assistant'
+            ? { kind: 'model', provider: route.provider, model: route.model }
+            : { kind: 'user' },
+        }))
+        // The instructions set up the thread once; later turns continue it and
+        // only carry the question itself.
+        const questionText = history.length === 0 ? INSTRUCTIONS + question : question
         const result = await collectAnswer(llm, {
           provider: route.provider,
           model: route.model,
           ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
-          messages: [...messages, {
+          messages: [...messages, ...historyMessages, {
             id: 'followup-question',
             role: 'user',
-            content: [{ type: 'text', text: INSTRUCTIONS + question }],
+            content: [{ type: 'text', text: questionText }],
             source: { kind: 'user' },
           }],
         })
@@ -370,7 +418,7 @@ export function apply(ctx) {
         }
         return jsonResponse({
           ok: true,
-          value: { answer: result.text, provider: route.provider, model: route.model, messages: messages.length, source: read.source },
+          value: { answer: result.text, provider: route.provider, model: route.model, messages: messages.length, turns: history.length, source: read.source },
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)

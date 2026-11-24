@@ -1,7 +1,7 @@
 {
   "name": "dsh-followup-thread",
-  "version": "1.0.0",
-  "description": "Ask a follow-up question under any earlier answer and keep the question and answer together, inline, without creating a new conversation in the sidebar.",
+  "version": "1.1.0",
+  "description": "Ask a follow-up question under any earlier answer and keep the question and answer together, inline, without creating a new conversation in the sidebar. A thread is a real conversation: you can keep talking in it.",
   "type": "module",
   "license": "MIT",
   "author": "1T2TTTTT",
